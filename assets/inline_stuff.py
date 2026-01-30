@@ -116,7 +116,7 @@ class InlineStuff(loader.Module):
             case "/start":
                 await message.answer_photo(
                     "https://raw.githubusercontent.com/sunshinelzt/sunshinelzt/refs/heads/main/assets/start_cmd.png",
-                    caption = '<tg-emoji emoji-id="5341316243787890013">😅</tg-emoji> <b>О, привет! Я не знаю, зачем ты тут, но раз уж пришёл — добро пожаловать <tg-emoji emoji-id="5339160947594380462">🌸</tg-emoji></b>\n\n<b><tg-emoji emoji-id="5339571155625850816">👍</tg-emoji> </b><b>Мой владелец:</b> @sunshinelzt'
+                    caption=self.strings("this_is_heroku"),
                 )
             case "/profile":
                 if message.from_user.id != self.client.tg_id:
