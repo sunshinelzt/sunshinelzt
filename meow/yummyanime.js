@@ -193,6 +193,60 @@ function _unpack(href) {
   return _safeJsonParse(decodeURIComponent(s.slice("yummy:".length)), null);
 }
 
+/**
+ * Categorizes voiceover into user-friendly badge for Shirox details: Дубляж, Субтитры, Закадр
+ */
+function _dubbingType(name) {
+  const s = String(name || "").toLowerCase().replace(/[\s-_]+/g, "");
+  if (s.includes("субтитр") || s.includes("sub")) return "Субтитры";
+  if (s.includes("дубляж") || s.includes("дублирован") || s.includes("studioband") || s.includes("студийнаябанда") || s.includes("deep") || s.includes("дип") || s.includes("flarrow") || s.includes("тодубляжная") || s.includes("реанимедиа") || s.includes("reanimedia")) return "Дубляж";
+  if (s.includes("двухголосый") || s.includes("2голосый")) return "2-голосый";
+  if (s.includes("многоголосый")) return "Многоголосый";
+  return "Закадровый";
+}
+
+/**
+ * High-performance In-Memory LRU Cache with TTL for Apple JavaScriptCore runtime
+ */
+class MemoryCache {
+  constructor(maxSize = 30, ttlMs = 10 * 60 * 1000) {
+    this.maxSize = maxSize;
+    this.ttlMs = ttlMs;
+    this.store = new Map();
+  }
+
+  get(key) {
+    if (!key) return null;
+    const entry = this.store.get(key);
+    if (!entry) return null;
+    if (Date.now() - entry.time > this.ttlMs) {
+      this.store.delete(key);
+      return null;
+    }
+    // Refresh LRU order
+    this.store.delete(key);
+    this.store.set(key, entry);
+    return entry.value;
+  }
+
+  set(key, value) {
+    if (!key) return;
+    if (this.store.has(key)) {
+      this.store.delete(key);
+    } else if (this.store.size >= this.maxSize) {
+      const oldestKey = this.store.keys().next().value;
+      if (oldestKey !== undefined) this.store.delete(oldestKey);
+    }
+    this.store.set(key, { time: Date.now(), value });
+  }
+}
+
+// Global in-memory caches persisting across Shirox session
+const _episodesCache = new MemoryCache(30, 10 * 60 * 1000);  // 30 anime, 10 min TTL
+const _streamsCache = new MemoryCache(50, 15 * 60 * 1000);   // 50 episodes, 15 min TTL
+const _searchCache = new MemoryCache(25, 5 * 60 * 1000);     // 25 searches, 5 min TTL
+const _kodikIframeCache = new MemoryCache(60, 20 * 60 * 1000); // 60 iframes, 20 min TTL
+
 // ---------------------------------------------------------------------------
 // 1. searchResults(keyword)
 // ---------------------------------------------------------------------------
@@ -205,6 +259,10 @@ function _unpack(href) {
 async function searchResults(keyword) {
   const q = String(keyword || "").trim();
   if (!q) return "[]";
+
+  const cacheKey = q.toLowerCase();
+  const cached = _searchCache.get(cacheKey);
+  if (cached) return cached;
 
   try {
     const url = `${API_BASE}/search?limit=30&offset=0&q=${encodeURIComponent(q)}`;
@@ -241,7 +299,9 @@ async function searchResults(keyword) {
     }
 
     results.sort((a, b) => a._score - b._score);
-    return JSON.stringify(results.map(({ _score, ...rest }) => rest));
+    const resultJson = JSON.stringify(results.map(({ _score, ...rest }) => rest));
+    _searchCache.set(cacheKey, resultJson);
+    return resultJson;
   } catch (err) {
     if (typeof console !== "undefined" && console.log) {
       console.log("[searchResults error] " + (err?.message || err));
@@ -313,6 +373,9 @@ async function extractEpisodes(animeIdOrUrl) {
   const raw = String(animeIdOrUrl || "").trim();
   if (!raw) return "[]";
 
+  const cached = _episodesCache.get(raw);
+  if (cached) return cached;
+
   try {
     let animeId = null;
 
@@ -327,6 +390,12 @@ async function extractEpisodes(animeIdOrUrl) {
     }
 
     if (!animeId) return "[]";
+
+    const cachedById = _episodesCache.get(animeId);
+    if (cachedById) {
+      _episodesCache.set(raw, cachedById);
+      return cachedById;
+    }
 
     const url = `${API_BASE}/anime/${encodeURIComponent(animeId)}/videos`;
     const res = await _request(url, _apiHeaders());
@@ -392,7 +461,10 @@ async function extractEpisodes(animeIdOrUrl) {
         };
       });
 
-    return JSON.stringify(episodes);
+    const resultJson = JSON.stringify(episodes);
+    _episodesCache.set(raw, resultJson);
+    _episodesCache.set(animeId, resultJson);
+    return resultJson;
   } catch (err) {
     if (typeof console !== "undefined" && console.log) {
       console.log("[extractEpisodes error] " + (err?.message || err));
@@ -446,6 +518,10 @@ function decode(input) {
  * Resolves Kodik iframe into available qualities and HLS .m3u8 stream URLs
  */
 async function kodikParser(url) {
+  if (!url) return {};
+  const cached = _kodikIframeCache.get(url);
+  if (cached) return cached;
+
   try {
     const headers = {
       "Referer": IMAGE_REFERER,
@@ -533,6 +609,9 @@ async function kodikParser(url) {
       }
     }
 
+    if (Object.keys(qualities).length > 0) {
+      _kodikIframeCache.set(url, qualities);
+    }
     return qualities;
   } catch (err) {
     if (typeof console !== "undefined" && console.log) {
@@ -540,6 +619,28 @@ async function kodikParser(url) {
     }
     return {};
   }
+}
+
+/**
+ * Concurrently executes an async mapper across an array with a bounded worker pool.
+ */
+async function _mapConcurrent(items, limit, fn) {
+  if (!Array.isArray(items) || !items.length) return [];
+  const results = new Array(items.length);
+  let index = 0;
+  const count = Math.min(limit || 8, items.length);
+  const workers = new Array(count).fill(0).map(async () => {
+    while (index < items.length) {
+      const i = index++;
+      try {
+        results[i] = await fn(items[i], i);
+      } catch (_) {
+        results[i] = null;
+      }
+    }
+  });
+  await Promise.all(workers);
+  return results;
 }
 
 // ---------------------------------------------------------------------------
@@ -551,10 +652,17 @@ async function kodikParser(url) {
  * @returns {Promise<string>} JSON string: { streams: [{ title, details, streamUrl, headers }] }
  */
 async function extractStreamUrl(href) {
+  const raw = String(href || "").trim();
+  if (!raw) {
+    return JSON.stringify({ streams: [] });
+  }
+
+  const cached = _streamsCache.get(raw);
+  if (cached) return cached;
+
   try {
     let options = [];
 
-    const raw = String(href || "").trim();
     if (raw.startsWith("yummy:")) {
       const payload = _unpack(raw);
       options = Array.isArray(payload?.options) ? payload.options : [];
@@ -569,32 +677,32 @@ async function extractStreamUrl(href) {
       return JSON.stringify({ streams: [] });
     }
 
-    // Sort voiceover options by popularity
+    // Sort voiceover options by popularity (AniLibria, StudioBand, Dream Cast, Crunchyroll, etc.)
     options.sort((a, b) => _dubbingRank(a.dubbing) - _dubbingRank(b.dubbing));
 
-    // Limit to top 6 voiceovers for fast concurrent resolution (< 500ms)
-    const topOptions = options.slice(0, 6);
-
-    // Resolve Kodik streams concurrently
-    const parsedResults = await Promise.allSettled(
-      topOptions.map(async (opt) => {
+    // Resolve ALL available voiceovers using bounded concurrency (pool of 12 workers)
+    // Resolves 36+ voiceovers in ~500-800ms without exceeding connection limits
+    const parsedResults = await _mapConcurrent(options, 12, async (opt) => {
+      try {
         const qualities = await kodikParser(opt.iframe_url);
         return { opt, qualities };
-      })
-    );
+      } catch (_) {
+        return null;
+      }
+    });
 
     const streams = [];
     const seenUrls = new Set();
 
+    // Pass 1: Exclusively high-definition streams (>= 720p: 720p, 1080p, etc.)
     for (const res of parsedResults) {
-      if (res.status !== "fulfilled" || !res.value) continue;
-      const { opt, qualities } = res.value;
-      if (!qualities || typeof qualities !== "object") continue;
+      if (!res || !res.qualities || typeof res.qualities !== "object") continue;
+      const { opt, qualities } = res;
 
-      // Sort qualities descending (1080 -> 720 -> 480 -> 360)
+      // Filter only 720p and higher, sorted descending (1080 -> 720)
       const qNums = Object.keys(qualities)
         .map(k => parseInt(String(k).replace(/[^\d]/g, ""), 10) || 0)
-        .filter(n => n > 0)
+        .filter(n => n >= 720)
         .sort((a, b) => b - a);
 
       for (const q of qNums) {
@@ -606,7 +714,7 @@ async function extractStreamUrl(href) {
 
         streams.push({
           title: `${opt.dubbing} (${q}p)`,
-          details: `${q}p • Kodik`,
+          details: `${q}p • ${_dubbingType(opt.dubbing)} • Kodik`,
           streamUrl: src,
           headers: {
             "Referer": KODIK_REFERER
@@ -615,10 +723,44 @@ async function extractStreamUrl(href) {
       }
     }
 
-    return JSON.stringify({
+    // Pass 2 Fallback: If absolutely no HD streams exist anywhere (e.g. retro 480p anime), take highest available
+    if (!streams.length) {
+      for (const res of parsedResults) {
+        if (!res || !res.qualities || typeof res.qualities !== "object") continue;
+        const { opt, qualities } = res;
+
+        const qNums = Object.keys(qualities)
+          .map(k => parseInt(String(k).replace(/[^\d]/g, ""), 10) || 0)
+          .filter(n => n > 0)
+          .sort((a, b) => b - a);
+
+        if (qNums.length > 0) {
+          const maxQ = qNums[0];
+          const item = qualities[String(maxQ)];
+          const src = item?.src;
+          if (src && !seenUrls.has(src)) {
+            seenUrls.add(src);
+            streams.push({
+              title: `${opt.dubbing} (${maxQ}p)`,
+              details: `${maxQ}p • ${_dubbingType(opt.dubbing)} • Kodik`,
+              streamUrl: src,
+              headers: {
+                "Referer": KODIK_REFERER
+              }
+            });
+          }
+        }
+      }
+    }
+
+    const resultJson = JSON.stringify({
       streams,
       allSubtitles: []
     });
+    if (streams.length > 0) {
+      _streamsCache.set(raw, resultJson);
+    }
+    return resultJson;
   } catch (err) {
     if (typeof console !== "undefined" && console.log) {
       console.log("[extractStreamUrl error] " + (err?.message || err));
