@@ -1,0 +1,24 @@
+{
+  "sourceName": "YummyAnime",
+  "iconUrl": "https://site.yummyani.me/img/icon/yummy-192.png",
+  "iconURL": "https://site.yummyani.me/img/icon/yummy-192.png",
+  "author": {
+    "name": "sunshinelzt",
+    "icon": "https://github.com/sunshinelzt.png",
+    "url": "https://github.com/sunshinelzt"
+  },
+  "description": "YummyAnime — модуль для Shirox (iOS/macOS). Просмотр аниме с русской озвучкой и субтитрами через плеер Kodik (HLS).",
+  "version": "1.1.0",
+  "language": "Russian",
+  "streamType": "HLS",
+  "quality": "1080p",
+  "baseUrl": "https://site.yummyani.me",
+  "searchBaseUrl": "https://api.yani.tv/search?limit=30&q=%s",
+  "scriptUrl": "https://raw.githubusercontent.com/sunshinelzt/sunshinelzt/main/meow/yummyanime.js",
+  "scriptURL": "https://raw.githubusercontent.com/sunshinelzt/sunshinelzt/main/meow/yummyanime.js",
+  "type": "anime",
+  "asyncJS": true,
+  "streamAsyncJS": true,
+  "downloadSupport": false,
+  "softsub": false
+}
